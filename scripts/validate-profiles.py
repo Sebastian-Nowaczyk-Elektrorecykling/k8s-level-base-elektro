@@ -114,24 +114,51 @@ def profile(name):
         "http", "apps-https", "admin-https", "management-https", "testing-https", "staging-https"}
     for n in ("longhorn", "longhorn-cnpg", "longhorn-garage", "longhorn-replicated"):
         sc = one(objects, "StorageClass", n)
-        assert sc["provisioner"] == "driver.longhorn.io"
-        assert sc["parameters"]["numberOfReplicas"] == ("3" if name == "k3s" and n == "longhorn-replicated" else "1")
+        if name == "k3s":
+            assert sc["provisioner"] == "driver.longhorn.io"
+            assert sc["parameters"]["numberOfReplicas"] == ("3" if n == "longhorn-replicated" else "1")
+        else:
+            standard = one(objects, "StorageClass", "standard")
+            assert {k: v for k, v in sc.items() if k != "metadata"} == {
+                k: v for k, v in standard.items() if k != "metadata"}
+            assert sc["provisioner"] == "rancher.io/local-path"
+            assert sc["volumeBindingMode"] == "WaitForFirstConsumer"
+            assert sc["reclaimPolicy"] == "Delete"
+            assert not sc.get("allowVolumeExpansion", False)
         assert sc["metadata"]["annotations"]["storageclass.kubernetes.io/is-default-class"] == ("true" if n == "longhorn" else "false")
-    assert {x["metadata"]["name"] for x in objects if x["kind"] == "HelmRelease"} == {
-        "cilium", "cert-manager", "longhorn", "cloudnative-pg", "plugin-barman-cloud", "garage", "velero"}
-    values = json.loads(one(objects, "ConfigMap", "cilium-values")["data"]["values.yaml"])
-    assert values["k8sServiceHost"] == settings["API_IP"]
-    assert values["kubeProxyReplacement"] is True
-    assert values["gatewayAPI"]["hostNetwork"]["enabled"] is True
+    common_releases = {"cert-manager", "cloudnative-pg", "plugin-barman-cloud", "garage", "velero"}
+    assert {x["metadata"]["name"] for x in objects if x["kind"] == "HelmRelease"} == common_releases | (
+        {"cilium", "longhorn"} if name == "k3s" else {"kind-gateway"})
+    controller = "io.cilium/gateway-controller" if name == "k3s" else "traefik.io/gateway-controller"
+    assert one(objects, "GatewayClass", "cilium")["spec"]["controllerName"] == controller
+    for n in ("network", "gateway", "apps"):
+        health = yaml.safe_dump(stages[n]["spec"]["healthCheckExprs"])
+        assert controller in health
     if name == "kind":
-        assert values["cgroup"]["hostRoot"] == "/sys/fs/cgroup"
+        gateway_values = one(objects, "HelmRelease", "kind-gateway")["spec"]["values"]
+        assert gateway_values["providers"]["kubernetesGateway"]["enabled"] is True
+        assert gateway_values["providers"]["kubernetesCRD"]["enabled"] is False
+        assert gateway_values["providers"]["kubernetesIngress"]["enabled"] is False
+        assert gateway_values["providers"]["kubernetesGateway"]["statusAddress"]["ip"] == settings["API_IP"]
+        for port, name_port in ((80, "web"), (443, "websecure")):
+            assert gateway_values["ports"][name_port]["port"] == port
+            assert gateway_values["ports"][name_port]["hostPort"] == port
+        assert stages["storage-longhorn"]["spec"]["wait"] is False
+        assert stages["storage-longhorn"]["spec"]["healthChecks"] == [{
+            "apiVersion": "apps/v1", "kind": "Deployment", "name": "local-path-provisioner", "namespace": "local-path-storage"}]
+        for n in ("ciliumnetworkpolicies.cilium.io", "ciliumclusterwidenetworkpolicies.cilium.io"):
+            crd = one(objects, "CustomResourceDefinition", n)
+            assert crd["metadata"]["annotations"]["kustomize.toolkit.fluxcd.io/substitute"] == "disabled"
         assert settings["CLUSTER_DNS_IP"] == "10.43.0.10"
         corefile = one(objects, "ConfigMap", "coredns")["data"]["Corefile"]
         assert settings["DOMAIN"] + ":53" in corefile
         assert "forward . " + settings["LAN_DNS_SERVICE_IP"] in corefile
         assert "cluster.local" in corefile
-        lh = one(objects, "HelmRelease", "longhorn")["spec"]["values"]
-        assert all(lh["csi"][k] == 1 for k in ("attacherReplicaCount", "provisionerReplicaCount", "resizerReplicaCount", "snapshotterReplicaCount"))
+    else:
+        values = json.loads(one(objects, "ConfigMap", "cilium-values")["data"]["values.yaml"])
+        assert values["k8sServiceHost"] == settings["API_IP"]
+        assert values["kubeProxyReplacement"] is True
+        assert values["gatewayAPI"]["hostNetwork"]["enabled"] is True
     print(f"{name}: built {len(leaves)} Flux targets, verified dependencies, Gateway, DNS and storage.")
     return leaves
 
@@ -151,30 +178,26 @@ def main():
     run("flux", "build", "kustomization", "flux-system", "--path", "./clusters/kind",
         "--kustomization-file", str(flux_root), "--dry-run", "--strict-substitute", "--in-memory-build")
     # The only kind differences at the resource layer are deliberate overlays.
-    for name in golden.keys() - {"cilium", "dns", "storage-classes", "storage-longhorn"}:
+    for name in golden.keys() - {"cilium", "network", "dns", "storage-classes", "storage-longhorn"}:
         assert golden[name] == kind[name], f"Unexpected profile difference: {name}"
     # Validate the actual kind chart inputs, not only the HelmRelease wrappers.
     cache = ROOT / ".cache/kind-rendered"
     cache.mkdir(parents=True, exist_ok=True)
-    cilium = json.loads(one(kind["cilium"], "ConfigMap", "cilium-values")["data"]["values.yaml"])
-    longhorn = one(kind["storage-longhorn"], "HelmRelease", "longhorn")["spec"]["values"]
-    for release, values, repo, version, namespace in (
-        ("cilium", cilium, "https://helm.cilium.io", config.load()["cilium_version"], "kube-system"),
-        ("longhorn", longhorn, "https://charts.longhorn.io", "1.12.1", "longhorn-system"),
-    ):
-        value_path = cache / f"{release}-values.yaml"
-        value_path.write_text(yaml.safe_dump(values))
-        manifest = cache / f"{release}.yaml"
-        manifest.write_text(run("helm", "template", release, release, "--repo", repo, "--version", version,
-            "--namespace", namespace, "--kube-version", "1.36.4", "--include-crds", "--values", str(value_path)))
-        if release == "longhorn":
-            policy = one(kind["storage-longhorn"], "NetworkPolicy", "kind-host-iscsi")
-            manifest.write_text(manifest.read_text() + "\n---\n" + yaml.safe_dump(policy))
-        schemas = ROOT / "storage/.cache/schemas"
-        assert schemas.exists(), "Run python3 storage/scripts/validate.py before this validator"
-        print(run("kubeconform", "-strict", "-summary", "-kubernetes-version", "1.36.4",
-            "-schema-location", str(schemas / "{{.Group}}_{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"),
-            "-schema-location", "default", str(manifest)), end="")
+    release = one(kind["cilium"], "HelmRelease", "kind-gateway")["spec"]
+    value_path = cache / "traefik-values.yaml"
+    value_path.write_text(yaml.safe_dump(release["values"]))
+    manifest = cache / "traefik.yaml"
+    manifest.write_text(run("helm", "template", "kind-gateway", "traefik", "--repo", "https://traefik.github.io/charts",
+        "--version", release["chart"]["spec"]["version"], "--namespace", "gateway-system",
+        "--kube-version", "1.36.4", "--values", str(value_path)))
+    rendered = docs(manifest.read_text())
+    assert not any(o["kind"] in ("Ingress", "IngressClass", "Gateway", "GatewayClass") for o in rendered)
+    deployment = one(rendered, "Deployment", "kind-gateway")
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    assert {p["hostPort"] for p in container["ports"] if "hostPort" in p} == {80, 443}
+    assert "--providers.kubernetesgateway" in container["args"]
+    assert one(rendered, "Service", "kind-gateway")["spec"]["type"] == "ClusterIP"
+    print(run("kubeconform", "-strict", "-summary", "-kubernetes-version", "1.36.4", str(manifest)), end="")
     print("Profile compatibility validation passed.")
 
 

@@ -1,88 +1,105 @@
-# kind on a Linux test host
+# Single-node kind test cluster
 
-The single node runs real Cilium, cert-manager, Longhorn, CNPG, Barman, Garage
-and Velero. Budget at least 4 CPUs, 12–16 GiB available RAM and 60 GiB free disk
-for the base plus smoke tests; applications need additional capacity. These are
-planning estimates, not measured limits.
+The node uses kindnet, kube-proxy and kind's local-path provisioner. Traefik
+provides Gateway API. cert-manager, Flux, CNPG, Barman, Garage and Velero keep
+the baseline releases. There is no custom node image, Cilium agent, Longhorn,
+iSCSI setup or host kernel modification.
 
 Requirements:
 
-- Local, rootful Docker on native Linux with cgroup v2 and private container
-  cgroup namespaces. Do not use a production host already running Cilium.
-- Kernel modules `iscsi_tcp`, `nfs`, `dm_crypt`, `xt_socket`, `xt_TPROXY`, `xt_mark`
-  and `xt_CT`. Install the modules package matching `uname -r` if required;
-  on Ubuntu this can be `linux-modules-extra-$(uname -r)`.
-- `.state/<name>/data` on ext4 or XFS. It is bind-mounted into the node at
-  `/var/lib/longhorn`; bootstrap checks the filesystem. Longhorn's storage reserve
-  still applies, so keep ample free space.
-- Python 3.11+, Git, OpenSSL, kubectl `v1.36.4`, Helm `v3.19.0`, kind `v0.33.0`.
-- Outbound access to apt, GitHub, chart repositories and image registries.
+- Local Docker running Linux containers: rootful Docker on Linux or Docker
+  Desktop. On Windows, run the bootstrap in WSL with Docker Desktop integration.
+  Remote daemons and rootless Docker are outside this bootstrap's support.
+- Python 3.11+, Git, OpenSSL, kubectl `v1.36.4`, kind `v0.33.0`.
+- Outbound access to GitHub, chart repositories, image registries and the
+  configured upstream DNS servers.
 - Loopback 80/443 TCP and 1053 TCP/UDP free by default.
+- Plan for 4 CPUs, 8 GiB available RAM and 30 GiB free disk for the base and
+  smoke tests; applications need additional capacity. These are estimates.
 
-The Dockerfile extends a digest-pinned node image with iSCSI, NFS and filesystem
-tools. Bootstrap loads host kernel modules through the privileged node, starts
-iscsid inside it, and checks Cilium cgroup isolation. It does not run k3s host
-preparation or the GPU/power-policy scripts. Docker Desktop, rootless Docker and
-remote Docker daemons are outside this profile's supported setup.
+CI exercises Linux Docker. Docker Desktop uses the same standard kind image and
+port mappings, but its host setup has not been tested by this repository's CI.
+Allow Docker Desktop to share the checkout directory. `.state/<name>/data` is
+mounted at `/var/local-path-provisioner` inside the node, where all alias classes
+store their data. Bootstrap verifies the standard provisioner and its path
+before proceeding.
 
-Before installing Flux, bootstrap applies the same CoreDNS settings that Flux
-will later own and checks public DNS from a pod. GitHub resolution therefore
-does not depend on fetching the repository that configures DNS.
+Before installing Flux, bootstrap configures CoreDNS and checks public DNS from
+a pod. This avoids making GitHub resolution depend on fetching the repository
+that configures DNS.
 
 ```bash
 python3 scripts/bootstrap-kind.py
 export KUBECONFIG="$PWD/.state/elektro-test/config.kubeconfig"
 kubectl get nodes,storageclasses
 kubectl -n flux-system get kustomizations
+python3 scripts/smoke-kind.py
 ```
 
 Pass `--name another-test` for a separate cluster/state directory. Change ports
-in `config/kind.json`, commit and push before creating a second simultaneous
-cluster. Existing clusters with different configuration are not adopted. Keep
-80/443 for the authentication add-on's unmodified SSO redirects. With a different
-HTTPS port, pass it to `scripts/smoke-kind.py --https-port PORT` as well.
+in `config/kind.json`, regenerate with `python3 scripts/generate-kind.py`, commit
+and push before creating a second simultaneous cluster. Existing clusters with
+different configuration are not adopted. Keep 80/443 for authentication add-ons'
+unmodified SSO redirects. With a different HTTPS port, pass it to
+`scripts/smoke-kind.py --https-port PORT` too.
 
 ## Browser, DNS and TLS
 
-Explicit host entries can map tested names to loopback:
+Explicit host entries map the applications under test to loopback:
 
 ```text
 127.0.0.1 auth.internal home.internal s3.internal
-127.0.0.1 authentik.admin.internal hubble.admin.internal longhorn.admin.internal openfga.admin.internal
+127.0.0.1 authentik.admin.internal openfga.admin.internal
 127.0.0.1 chat.internal llm.internal flows.internal notebook.internal mlflow.internal
 ```
 
-Hosts files do not support wildcards. For arbitrary names, use a local DNS
-resolver forwarding `internal` to `127.0.0.1:1053`, or to the Docker node IP on
-port 53. DNS returns the node IP, reachable from a native Linux Docker host.
-Do not forward the production LAN's `internal` suffix to the test cluster.
-Pods use Kubernetes DNS, which forwards the private suffix to `lan-dns`; their
-normal add-on URLs work without host entries.
+Hosts files do not support wildcards. A local resolver can instead answer the
+private suffix with `127.0.0.1`. On native Linux, forwarding `internal` to
+`127.0.0.1:1053` also works: that DNS server returns the Docker node IP. Docker
+Desktop does not normally expose that node IP to the host, so use loopback host
+entries or a resolver returning loopback there. Keep test DNS local to your
+machine. Pods use Kubernetes DNS, which forwards the private suffix to
+`lan-dns`; their normal add-on URLs resolve to the node and reach the Gateway.
 
 ```bash
 dig @127.0.0.1 -p 1053 auth.internal
-kubectl -n flux-system get cm cluster-settings -o jsonpath='{.data.API_IP}'
 curl --noproxy '*' --cacert .state/elektro-test/ca.crt \
   --resolve auth.internal:443:127.0.0.1 https://auth.internal/
 ```
 
 That URL responds after the authentication add-on is installed. Import the
-public `.state/elektro-test/ca.crt` into your test browser's trust store. Never
-copy `ca.key` into an application or Git. Reruns preserve the in-cluster CA;
+public `.state/elektro-test/ca.crt` into the test browser's trust store. Keep the
+private `ca.key` out of applications and Git. Reruns preserve the in-cluster CA;
 an incomplete local CA or API read failure stops without rotating it.
 
-## Lifecycle and limits
+## What applications can expect
 
-There is one storage copy and failure domain. `longhorn-replicated` has one
-replica on kind; it is not a redundancy test. CSI, PVC expansion and Longhorn
-APIs are real. Backups are unconfigured, as in the golden storage repository.
-GPU resources are not emulated.
+Ordinary filesystem `ReadWriteOnce` PVCs and HTTPRoutes use the same names as
+k3s. `longhorn`, `longhorn-cnpg`, `longhorn-garage` and `longhorn-replicated` all
+use `rancher.io/local-path`, `WaitForFirstConsumer` and `Delete`. `longhorn` is
+the sole default; `standard` remains available as non-default. A PVC binds when
+its first consumer is scheduled. kind's provisioner is local-path, not a
+Longhorn CSI driver: it does not emulate replication, RWX across nodes, volume
+expansion, block volumes, CSI snapshots, or Longhorn APIs. Requested capacity
+is not a disk quota.
 
-The pinned Longhorn 1.12.1 release needs an additional ingress policy for Cilium's
-link-local iSCSI source. The kind overlay permits `169.254.0.0/16` only to
-instance-manager TCP/3260, following the [documented upstream issue](https://github.com/longhorn/longhorn/issues/13802).
+The GatewayClass remains named `cilium` for app compatibility, with controller
+`traefik.io/gateway-controller`. The Gateway, six listeners, namespace selectors,
+TLS names and private DNS zones are unchanged. Traefik-specific CRDs and the
+legacy Ingress provider are disabled.
 
-To destroy a disposable cluster, verify the name and run:
+Real Cilium policy CRDs are registered so existing app repositories containing
+`CiliumNetworkPolicy` or `CiliumClusterwideNetworkPolicy` can reconcile.
+**Policies are not enforced.** This profile tests application behavior, not
+Cilium security or network isolation. Hubble and Longhorn UIs are absent, so
+admin links/proxies to those services will not work. See the complete
+[compatibility contract](compatibility.md).
+
+CNPG, Barman, Garage and Velero are real deployments. Backup destinations and
+schedules remain unconfigured, as in the golden baseline. GPU resources and
+multiple failure domains are not emulated.
+
+## Cleanup
 
 ```bash
 kind get clusters
@@ -91,12 +108,12 @@ kind delete cluster --name elektro-test
 
 This deletes the control plane and its metadata. Host data remains under
 `.state/<name>/data`, but is not an automatic recovery mechanism. Archive or
-remove the old state directory deliberately before starting a fresh cluster
-with the same name. Removing it also removes test volumes and the CA key.
-Remove the test CA from your trust store when retiring the environment.
+remove the old state directory deliberately before creating a new cluster with
+the same name. Removing it also removes test volumes and the CA key. Remove the
+test CA from your trust store when retiring the environment. A cluster created
+with the earlier Cilium/Longhorn kind profile must be recreated; in-place CNI
+and storage migration is not supported.
 
 References: [kind configuration](https://kind.sigs.k8s.io/docs/user/configuration/),
-[node image digests](https://github.com/kubernetes-sigs/kind/releases/tag/v0.33.0),
-[Cilium on kind](https://docs.cilium.io/en/stable/installation/kind/),
-[Gateway prerequisites](https://docs.cilium.io/en/stable/network/servicemesh/gateway-api/gateway-api/),
-[Longhorn requirements](https://longhorn.io/docs/1.12.1/deploy/install/).
+[kind's built-in storage](https://github.com/kubernetes-sigs/kind/blob/v0.33.0/pkg/build/nodeimage/const_storage.go),
+[Traefik Gateway API](https://doc.traefik.io/traefik/reference/install-configuration/providers/kubernetes/kubernetes-gateway/).

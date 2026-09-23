@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create/resume the single-node Linux Docker test cluster, then attach Flux."""
+"""Create/resume a standard single-node kind cluster, then attach the base via Flux."""
 import argparse
 import base64
 import ipaddress
@@ -113,8 +113,7 @@ def initialize_ca(kube, state, cluster_name):
 
 def cluster_config(c, settings, state):
     return {"kind": "Cluster", "apiVersion": "kind.x-k8s.io/v1alpha4",
-        "networking": {"disableDefaultCNI": True, "kubeProxyMode": "none",
-                       "podSubnet": c["pod_cidr"], "serviceSubnet": c["service_cidr"],
+        "networking": {"podSubnet": c["pod_cidr"], "serviceSubnet": c["service_cidr"],
                        "apiServerAddress": "127.0.0.1"},
         "nodes": [{"role": "control-plane", "labels": {
             "elektro.internal/role": "hybrid", "elektro.internal/edge": "true",
@@ -124,12 +123,28 @@ def cluster_config(c, settings, state):
                 for port, host, proto in [(80, settings["http_port"], "TCP"),
                     (443, settings["https_port"], "TCP"), (53, settings["dns_port"], "UDP"),
                     (53, settings["dns_port"], "TCP")]],
-            "extraMounts": [{"hostPath": "/lib/modules", "containerPath": "/lib/modules", "readOnly": True},
-                            {"hostPath": str(state / "data"), "containerPath": "/var/lib/longhorn"}]}]}
+            "extraMounts": [{"hostPath": str(state / "data"),
+                             "containerPath": "/var/local-path-provisioner"}]}]}
+
+
+def check_local_storage(kube):
+    standard = get(kube, "storageclass/standard")
+    expected = {"provisioner": "rancher.io/local-path", "volumeBindingMode": "WaitForFirstConsumer",
+                "reclaimPolicy": "Delete", "parameters": {}, "allowVolumeExpansion": False}
+    for key, value in expected.items():
+        if standard.get(key, {} if key == "parameters" else False) != value:
+            raise RuntimeError("kind's standard StorageClass changed: " + key + "; review the aliases before proceeding.")
+    provisioner = get(kube, "configmap/local-path-config", "-n", "local-path-storage")
+    paths = json.loads(provisioner["data"]["config.json"])["nodePathMap"]
+    if paths != [{"node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": ["/var/local-path-provisioner"]}]:
+        raise RuntimeError("Unexpected kind local-path data directory; refusing to leave test volumes outside the state mount.")
 
 
 def check_host_ports(mappings):
-    privileged_start = int(Path("/proc/sys/net/ipv4/ip_unprivileged_port_start").read_text())
+    try:
+        privileged_start = int(Path("/proc/sys/net/ipv4/ip_unprivileged_port_start").read_text())
+    except FileNotFoundError:
+        privileged_start = 1024  # Docker Desktop hosts do not have Linux /proc.
     for mapping in mappings:
         kind = socket.SOCK_STREAM if mapping["protocol"] == "TCP" else socket.SOCK_DGRAM
         with socket.socket(socket.AF_INET, kind) as sock:
@@ -153,19 +168,17 @@ def main():
     import re
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
         parser.error("Use a lowercase alphanumeric cluster name, separated by hyphens.")
-    for tool in ("docker", "kind", "kubectl", "helm", "openssl", "git"):
+    for tool in ("docker", "kind", "kubectl", "openssl", "git"):
         if not shutil.which(tool):
             raise RuntimeError(f"Install {tool} before running this script.")
-    if sys.platform != "linux" or not Path("/sys/fs/cgroup/cgroup.controllers").exists():
-        raise RuntimeError("Use a native Linux Docker host with cgroup v2; see docs/kind.md.")
     docker = json.loads(run("docker", "info", "--format", "{{json .}}", capture=True))
     if docker["OSType"] != "linux" or any("rootless" in s for s in docker.get("SecurityOptions", [])):
-        raise RuntimeError("Rootful Linux Docker is required for Cilium and Longhorn.")
+        raise RuntimeError("Use local Docker with Linux containers (rootful Docker or Docker Desktop).")
     if settings["kind_version"] not in run("kind", "version", capture=True):
         raise RuntimeError("Install kind " + settings["kind_version"])
     run(sys.executable, "scripts/config.py", "check")
     run(sys.executable, "scripts/generate-kind.py", "--check")
-    # Flux must fetch the exact checkout used to install Cilium.
+    # Flux must fetch the exact configuration used to create this cluster.
     if run("git", "status", "--porcelain", capture=True).strip():
         raise RuntimeError("Commit and push changes before bootstrap.")
     remote = run("git", "ls-remote", c["git_url"], "refs/heads/" + c["git_branch"], capture=True).split()
@@ -186,28 +199,19 @@ def main():
             raise RuntimeError("Old cluster state remains. Archive it and use a fresh state directory; see docs/kind.md.")
         check_host_ports(configuration["nodes"][0]["extraPortMappings"])
         config_path.write_text(json.dumps(configuration, indent=2) + "\n")
-        image = "elektro-kind-node:v1.36.4"
-        run("docker", "build", "--build-arg", "NODE_IMAGE=" + settings["node_image"],
-            "-t", image, "kind")
-        # Do not wait for Node Ready here: Cilium has not been installed yet.
-        run("kind", "create", "cluster", "--name", name, "--image", image, "--config", config_path,
-            "--kubeconfig", state / "config.kubeconfig")
+        run("kind", "create", "cluster", "--name", name, "--image", settings["node_image"], "--config", config_path,
+            "--kubeconfig", state / "config.kubeconfig", "--wait", "5m")
     # A dedicated kubeconfig prevents changing the user's current context.
     run("kind", "export", "kubeconfig", "--name", name, "--kubeconfig", state / "config.kubeconfig")
     os.environ["KUBECONFIG"] = str(state / "config.kubeconfig")
     kube = ["kubectl", "--context", "kind-" + name]
     node = name + "-control-plane"
-    if run("docker", "exec", node, "readlink", "/proc/self/ns/cgroup", capture=True).strip() == os.readlink("/proc/self/ns/cgroup"):
-        raise RuntimeError("Docker nodes must use private cgroup namespaces for Cilium.")
     if get(kube, "node", node)["metadata"]["labels"].get("elektro.internal/profile") != "kind":
         raise RuntimeError("Refusing to modify a cluster without the kind profile label.")
-    run("docker", "exec", node, "sh", "-ec",
-        "for module in iscsi_tcp nfs dm_crypt xt_socket xt_TPROXY xt_mark xt_CT; do modprobe \"$module\"; done; "
-        "systemctl enable --now iscsid; systemctl is-active --quiet iscsid; "
-        "test -f /etc/iscsi/initiatorname.iscsi; "
-        "fs=$(findmnt -n -o FSTYPE -T /var/lib/longhorn); "
-        "case \"$fs\" in ext4|xfs) ;; *) echo 'Longhorn data directory requires ext4 or XFS' >&2; exit 1;; esac")
-    # kind installs this additional default even when its CNI is disabled.
+    run(*kube, "wait", "node", "--all", "--for=condition=Ready", "--timeout=300s")
+    run(*kube, "-n", "local-path-storage", "rollout", "status", "deployment/local-path-provisioner", "--timeout=300s")
+    check_local_storage(kube)
+    # The compatibility class named longhorn becomes the sole default.
     run(*kube, "annotate", "storageclass", "standard", "storageclass.kubernetes.io/is-default-class=false", "--overwrite")
     classes = get(kube, "storageclasses")["items"]
     for sc in classes:
@@ -222,23 +226,6 @@ def main():
     cidr = next(x["Subnet"] for x in network["IPAM"]["Config"]
                 if ipaddress.ip_network(x["Subnet"]).version == 4 and
                 ipaddress.ip_address(node_ip) in ipaddress.ip_network(x["Subnet"]))
-    installed = run(*kube, "apply", "--server-side", "-k", "infrastructure/gateway-api", "-o", "name", capture=True)
-    crds = [r for r in installed.splitlines() if r.startswith("customresourcedefinition.")]
-    if not crds:
-        raise RuntimeError("Gateway API bundle did not contain any CRDs.")
-    run(*kube, "wait", "--for=condition=Established", "--timeout=120s", *crds)
-    values = json.loads((ROOT / "profiles/kind/cilium/values.yaml").read_text())
-    values["k8sServiceHost"] = node_ip
-    (state / "cilium-values.json").write_text(json.dumps(values))
-    # If already adopted, Flux is the sole Helm release manager.
-    crd = get(kube, "crd/helmreleases.helm.toolkit.fluxcd.io", "--ignore-not-found")
-    release = get(kube, "helmrelease/cilium", "-n", "kube-system", "--ignore-not-found") if crd else None
-    if not release:
-        run("helm", "repo", "add", "cilium", "https://helm.cilium.io", "--force-update")
-        run("helm", "repo", "update", "cilium")
-        run("helm", "upgrade", "--install", "cilium", "cilium/cilium", "--namespace", "kube-system",
-            "--version", c["cilium_version"], "--values", state / "cilium-values.json", "--wait", "--timeout", "15m")
-    run(*kube, "wait", "node", "--all", "--for=condition=Ready", "--timeout=300s")
     run(*kube, "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=300s")
     bootstrap_dns(kube, c)
     initialize_ca(kube, state, name)
@@ -255,7 +242,7 @@ def main():
     run(*kube, "apply", "-k", "kind/bootstrap/storage")
     wait(kube, "gitrepository/storage-addons", "kustomization/storage-addons")
     wait(kube, *["kustomization/storage-" + n for n in (
-        "namespaces", "sources", "longhorn", "classes", "cnpg", "barman", "garage", "velero")], timeout="30m")
+        "namespaces", "sources", "longhorn", "classes", "cnpg", "barman", "garage", "velero")])
     run(sys.executable, "scripts/check-base.py", "--profile", "kind")
     print(f"Ready. Export KUBECONFIG={state / 'config.kubeconfig'} before attaching add-ons.")
     print(f"Public test CA: {state / 'ca.crt'}; test data: {state / 'data'}")

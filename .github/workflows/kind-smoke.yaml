@@ -12,28 +12,15 @@ jobs:
   kind:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - name: Make room for storage on the disposable runner
-        run: |
-          # These SDKs belong to this fresh GitHub-hosted VM, not a user host.
-          # Keep Longhorn's normal disk reserve and make room for its images/PVs.
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL
-          docker image prune --all --force
-          df -h "$GITHUB_WORKSPACE" /var/lib/docker
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
-      - uses: azure/setup-helm@v4
-        with: {version: v3.19.0}
       - uses: azure/setup-kubectl@v4
         with: {version: v1.36.4}
-      - name: Install kind and kernel modules
+      - name: Install kind
         run: |
-          sudo apt-get update
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          sudo modprobe iscsi_tcp
-          sudo modprobe nfs
           mkdir -p .cache/bin
           curl -fsSL --retry 3 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o .cache/bin/kind
           curl -fsSL --retry 3 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum -o .cache/bin/kind.sha256sum
@@ -42,7 +29,7 @@ jobs:
           echo "$PWD/.cache/bin" >> "$GITHUB_PATH"
       - name: Bootstrap full base
         run: python3 scripts/bootstrap-kind.py
-      - name: Exercise PVCs, DNS, HTTPS policy and CNPG
+      - name: Exercise PVCs, DNS, HTTPS and CNPG
         env:
           KUBECONFIG: ${{ github.workspace }}/.state/elektro-test/config.kubeconfig
         run: python3 scripts/smoke-kind.py
@@ -54,12 +41,9 @@ jobs:
           df -h "$GITHUB_WORKSPACE" /var/lib/docker
           kubectl get pods -A -o wide || true
           kubectl get pvc -A || true
-          kubectl -n longhorn-system get nodes.longhorn.io,volumes.longhorn.io -o yaml || true
-          kubectl -n longhorn-system get engines.longhorn.io,replicas.longhorn.io -o yaml || true
-          kubectl -n longhorn-system logs -l app=longhorn-manager --tail=100 --prefix=true || true
-          kubectl -n longhorn-system logs -l longhorn.io/component=instance-manager --all-containers=true --tail=200 --prefix=true || true
-          docker exec elektro-test-control-plane journalctl -u iscsid --no-pager -n 100 || true
-          timeout 30s kubectl -n kube-system exec daemonset/cilium -c cilium-agent -- cilium-dbg monitor --type drop || true
+          kubectl get gatewayclasses,gateways,httproutes -A -o yaml || true
+          kubectl -n gateway-system logs deployment/kind-gateway --tail=150 || true
+          kubectl -n local-path-storage logs deployment/local-path-provisioner --tail=100 || true
           kubectl -n flux-system get kustomizations -o yaml || true
           kubectl -n flux-system get gitrepositories -o yaml || true
           kubectl -n flux-system logs deployment/source-controller --tail=100 || true

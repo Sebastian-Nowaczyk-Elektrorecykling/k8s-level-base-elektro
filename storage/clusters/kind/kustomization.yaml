@@ -24,7 +24,7 @@
         "kind": "Kustomization",
         "name": "storage-longhorn"
       },
-      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/longhorn\"}]"
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/local-storage\"}, {\"op\": \"replace\", \"path\": \"/spec/wait\", \"value\": false}, {\"op\": \"add\", \"path\": \"/spec/healthChecks\", \"value\": [{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"name\": \"local-path-provisioner\", \"namespace\": \"local-path-storage\"}]}]"
     }
   ]
 }

@@ -27,23 +27,21 @@ identities remain as before. Storage attaches only after the network is healthy.
 Stateful prune/deletion settings are unchanged.
 
 Kind changes are isolated in `clusters/kind`, `storage/clusters/kind`,
-`profiles/kind` and `kind/bootstrap`. They change Cilium's API endpoint, cgroup
-mount and interface, configure kubeadm CoreDNS explicitly, and reduce Longhorn
-replica counts. Kind CoreDNS does not automatically import `coredns-custom`, so
-the kind DNS target also manages its Corefile. The unused `standard` class
-installed by kind becomes non-default; `longhorn` is the sole default.
+`profiles/kind` and `kind/bootstrap`. They replace the Cilium Helm target with a
+Traefik Gateway controller and policy CRDs, change GatewayClass's controller,
+configure kubeadm CoreDNS, and replace the Longhorn target with kind's built-in
+local-path storage. The four application StorageClasses copy `standard`, which
+becomes non-default. No k3s leaf resources are changed by these overlays.
 
-The kind Longhorn target also adds an ingress allowance from Cilium's link-local
-range `169.254.0.0/16` to instance-manager TCP/3260. This permits the node's iSCSI
-initiator under the pinned Longhorn 1.12.1 policies; other internal restrictions
-remain enabled. See the [upstream issue and maintainer confirmation](https://github.com/longhorn/longhorn/issues/13802).
-The k3s manifests retain the original policy configuration.
+The Flux stage named `cilium` checks the kind Gateway HelmRelease and policy
+CRDs. The stage named `storage-longhorn` checks the actual local-path provisioner
+Deployment. These names preserve application `dependsOn` references. Gateway
+health expressions use Traefik's controller name only in kind.
 
 The bootstrap-owned `kind-runtime` supplies the Docker node address to the root
-Flux Kustomization. Flux owns `cluster-settings` and passes it to the same child
-stages. Flux CRDs are labelled to disable substitution of the shell-expression
-examples in their schema descriptions. No production address is committed into
-kind Cilium values.
+Flux Kustomization. Flux owns `cluster-settings` and passes it to child stages.
+Flux and policy CRDs disable substitution of shell-expression examples in
+schema descriptions. No production address is used by the kind Gateway.
 
 To upgrade, inspect new upstream commits, update the lock and golden files,
 regenerate both profiles, run validation/live tests, and review the k3s diff.

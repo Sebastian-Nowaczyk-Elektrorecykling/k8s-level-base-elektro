@@ -31,7 +31,14 @@
         "kind": "Kustomization",
         "name": "cilium"
       },
-      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/cilium\"}]"
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/gateway-controller\"}, {\"op\": \"replace\", \"path\": \"/spec/dependsOn\", \"value\": [{\"name\": \"gateway-api\"}, {\"name\": \"namespaces\"}]}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "network"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/network\"}]"
     },
     {
       "target": {
@@ -39,6 +46,13 @@
         "name": "dns"
       },
       "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/dns\"}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "(network|gateway|apps)"
+      },
+      "path": "gateway-health.yaml"
     }
   ]
 }

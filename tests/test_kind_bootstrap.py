@@ -31,12 +31,26 @@ class KindBootstrapTests(unittest.TestCase):
         settings = json.loads((ROOT / "config/kind.json").read_text())
         obj = kind.cluster_config(c, settings, Path("/tmp/test-state"))
         self.assertEqual(len(obj["nodes"]), 1)
-        self.assertTrue(obj["networking"]["disableDefaultCNI"])
-        self.assertEqual(obj["networking"]["kubeProxyMode"], "none")
+        self.assertNotIn("disableDefaultCNI", obj["networking"])
+        self.assertNotIn("kubeProxyMode", obj["networking"])
         self.assertEqual(obj["networking"]["serviceSubnet"], c["service_cidr"])
         self.assertEqual(obj["networking"]["podSubnet"], c["pod_cidr"])
         self.assertEqual(obj["nodes"][0]["labels"]["elektro.internal/edge"], "true")
         self.assertTrue(all(p["listenAddress"] == "127.0.0.1" for p in obj["nodes"][0]["extraPortMappings"]))
+        self.assertEqual(obj["nodes"][0]["extraMounts"], [{
+            "hostPath": "/tmp/test-state/data", "containerPath": "/var/local-path-provisioner"}])
+
+    def test_storage_aliases_refuse_a_changed_default_provisioner(self):
+        standard = {"provisioner": "rancher.io/local-path", "reclaimPolicy": "Delete",
+                    "volumeBindingMode": "WaitForFirstConsumer"}
+        paths = {"data": {"config.json": json.dumps({"nodePathMap": [{
+            "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES", "paths": ["/var/local-path-provisioner"]}]})}}
+        with patch.object(kind, "get", side_effect=[standard, paths]):
+            kind.check_local_storage([])
+        standard["provisioner"] = "another.driver"
+        with patch.object(kind, "get", return_value=standard):
+            with self.assertRaisesRegex(RuntimeError, "standard StorageClass changed"):
+                kind.check_local_storage([])
 
     def test_wait_rejects_old_ready_generation_and_waits_for_creation(self):
         old = {"metadata": {"generation": 2}, "status": {"conditions": [

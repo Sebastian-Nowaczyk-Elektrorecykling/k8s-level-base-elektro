@@ -19,7 +19,9 @@ def run(*args, input=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--https-port", type=int, default=443)
+    ports = json.loads((ROOT / "config/kind.json").read_text())
+    parser.add_argument("--http-port", type=int, default=ports["http_port"])
+    parser.add_argument("--https-port", type=int, default=ports["https_port"])
     args = parser.parse_args()
     run(sys.executable, str(ROOT / "scripts/check-base.py"), "--profile", "kind")
     settings = json.loads(run("kubectl", "-n", "flux-system", "get", "cm/cluster-settings", "-o", "json"))["data"]
@@ -70,14 +72,31 @@ def main():
         with tempfile.TemporaryDirectory() as tmp:
             ca = Path(tmp) / "ca.crt"
             ca.write_bytes(base64.b64decode(secret["data"]["tls.crt"]))
-            # Curl validates both the certificate and the hostname. The Cilium
-            # policy only admits the Gateway's reserved ingress identity.
+            # Curl validates both the certificate and the hostname. Applying the
+            # Cilium policy above tests schema compatibility, not enforcement.
             body = run("curl", "--noproxy", "*", "--fail", "--silent", "--show-error",
                 "--retry", "30", "--retry-delay", "2", "--retry-all-errors", "--max-time", "10",
                 "--cacert", str(ca), "--resolve", f"{hostname}:{args.https_port}:127.0.0.1",
                 f"https://{hostname}:{args.https_port}/")
             if "Hostname:" not in body:
                 raise RuntimeError("Gateway response did not reach the echo backend")
+            headers = run("curl", "--noproxy", "*", "--silent", "--show-error", "--max-time", "10",
+                "--dump-header", "-", "--output", "/dev/null", "--resolve", f"{hostname}:{args.http_port}:127.0.0.1",
+                f"http://{hostname}:{args.http_port}/")
+            if "location: https://" + hostname not in headers.lower():
+                raise RuntimeError("HTTP did not redirect to the HTTPS Gateway")
+            apply(resource("v1", "ConfigMap", "test-ca", data={"ca.crt": ca.read_text()}))
+        # Exercise the URL that pods use for SSO callbacks and service access,
+        # including private DNS, node hostPorts and certificate verification.
+        apply(resource("batch/v1", "Job", "pod-https", spec={"backoffLimit": 1, "activeDeadlineSeconds": 120,
+            "template": {"spec": {"restartPolicy": "Never", "containers": [{"name": "curl",
+                "image": "curlimages/curl:8.16.0", "args": ["--fail", "--silent", "--show-error", "--max-time", "30",
+                    "--cacert", "/ca/ca.crt", "https://" + hostname + "/"],
+                "volumeMounts": [{"name": "ca", "mountPath": "/ca", "readOnly": True}]}],
+                "volumes": [{"name": "ca", "configMap": {"name": "test-ca"}}]}}}))
+        run("kubectl", "-n", namespace, "wait", "job/pod-https", "--for=condition=Complete", "--timeout=180s")
+        if "Hostname:" not in run("kubectl", "-n", namespace, "logs", "job/pod-https"):
+            raise RuntimeError("Pod HTTPS did not reach the echo backend")
         apply(resource("postgresql.cnpg.io/v1", "Cluster", "database", spec={"instances": 1,
             "storage": {"storageClass": "longhorn-cnpg", "size": "1Gi"},
             "bootstrap": {"initdb": {"database": "app", "owner": "app"}}}))
@@ -87,7 +106,7 @@ def main():
                      "psql", "-U", "postgres", "-tAc", "SELECT 1")
         if result.strip() != "1":
             raise RuntimeError("CNPG SQL probe failed")
-        print("Smoke passed: four PVC write/remount checks, private/cluster DNS, verified HTTPS with Cilium policy, and CNPG SQL.")
+        print("Smoke passed: four PVC write/remount checks, private/cluster DNS, host/pod HTTPS, HTTP redirect, policy API compatibility, and CNPG SQL.")
     finally:
         # Only this invocation's randomly named disposable namespace is removed.
         run("kubectl", "delete", "namespace", namespace, "--wait=false")

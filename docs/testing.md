@@ -16,12 +16,12 @@ python3 scripts/validate-profiles.py
 
 Inherited validators render pinned charts and check schemas. Profile validation
 checks file hashes, golden settings, all Flux paths/dependencies, substitutions,
-disjoint ownership, Gateway names/listeners and actual CSI classes. The Flux CLI
+disjoint ownership, Gateway names/listeners and profile-specific storage provisioners. The Flux CLI
 also performs the kind root's strict substitution offline. Bootstrap
 tests cover CA error handling and stale readiness. Set `COREDNS` to the pinned
 CoreDNS binary for the inherited DNS protocol tests.
 
-After kind bootstrap on Linux Docker:
+After kind bootstrap:
 
 ```bash
 export KUBECONFIG="$PWD/.state/elektro-test/config.kubeconfig"
@@ -32,14 +32,13 @@ python3 scripts/smoke-kind.py
 The smoke test creates a random disposable namespace and removes only that
 namespace afterward. It writes to all four StorageClasses, deletes the writer
 pod, remounts and verifies the data. It checks private/cluster DNS, HTTPS with
-CA verification through `testing-https` and Cilium ingress policy, then creates
+CA verification through `testing-https` and acceptance of an app Cilium policy
+manifest (without enforcement), then creates
 a CNPG database and executes SQL. It requires free storage for the test PVCs.
 
 Static CI runs on pushes and pull requests. Kind smoke runs on `main` pushes
 and can be dispatched against `main`. It uses a fresh Linux runner, not a user
-cluster. The workflow removes unused preinstalled SDKs from that disposable VM
-to leave room for storage while retaining Longhorn's normal disk reserve.
-A run must pass before claiming live kind validation. Bootstrap requires
+cluster. A run must pass before claiming live kind validation. Bootstrap requires
 the checkout to match the configured branch, so PR branches get static checks.
 
 To test a separate branch on your own host, change `git_branch` in

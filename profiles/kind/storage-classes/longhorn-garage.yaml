@@ -1,0 +1,13 @@
+{
+  "apiVersion": "storage.k8s.io/v1",
+  "kind": "StorageClass",
+  "metadata": {
+    "name": "longhorn-garage",
+    "annotations": {
+      "storageclass.kubernetes.io/is-default-class": "false"
+    }
+  },
+  "provisioner": "rancher.io/local-path",
+  "volumeBindingMode": "WaitForFirstConsumer",
+  "reclaimPolicy": "Delete"
+}

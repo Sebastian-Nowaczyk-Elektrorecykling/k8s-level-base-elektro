@@ -11,23 +11,26 @@ preserved. Only Git identity and storage repository paths change. Imported files
 and revisions are recorded in [the lock file](config/upstream-lock.json), with
 [automated parity checks](docs/parity.md).
 
-**kind runs the same controllers and service names on one Linux Docker node.**
-All four StorageClasses use real Longhorn with one replica, including
-`longhorn-replicated`. The Longhorn UI, Garage S3 endpoint, CNPG and Barman APIs
-remain available to downstream add-ons.
+**kind uses its built-in networking and local-path storage on one node.**
+Traefik implements Gateway API while retaining the Gateway names used by add-ons.
+The four storage names are copies of kind's `standard` class, with `longhorn` as
+the sole default. No Cilium or Longhorn controller is installed on kind.
 
 | Contract | k3s | kind |
 | --- | --- | --- |
-| Kubernetes | `v1.36.4+k3s1` | `v1.36.4`, kind `v0.33.0`, node image pinned by digest |
-| Cilium / Gateway API / Flux | `1.20.2` / `v1.6.1` / `v2.9.5` | Same |
-| Gateway | `gateway-system/internal`, class `cilium` | Same |
+| Kubernetes | `v1.36.4+k3s1` | `v1.36.4`, kind `v0.33.0`, digest-pinned node image |
+| Networking | Cilium `1.20.2` | kindnet and kube-proxy |
+| Gateway API / Flux | `v1.6.1` / `v2.9.5` | Same |
+| Gateway controller | Cilium | Traefik, chart `41.6.0` |
+| Gateway identity | `gateway-system/internal`, class `cilium` | Same names; class controller is Traefik |
 | HTTPS listeners | `apps-https`, `admin-https`, `management-https`, `testing-https`, `staging-https` | Same |
 | Settings | `flux-system/cluster-settings` | Same keys; runtime container IP and network |
 | TLS | `internal-ca` issuer; `internal-wildcard-tls` Secret | Same names; separate test CA |
-| StorageClasses | `longhorn` (default), `longhorn-cnpg`, `longhorn-garage`, `longhorn-replicated` | Same names and CSI driver |
-| Replicas | 1 / 1 / 1 / **3** | 1 / 1 / 1 / **1** |
-| Storage controllers | Longhorn, CNPG, Barman, Garage, Velero | Same; Longhorn CSI/UI replicas reduced to 1 |
-| Flux dependencies | `cilium`, `dns`, `pki`, `gateway`, `storage-*` | Same, backed by real reconciliations |
+| StorageClasses | `longhorn` (default), `longhorn-cnpg`, `longhorn-garage`, `longhorn-replicated` | Same names, using `rancher.io/local-path` |
+| Storage copies | 1 / 1 / 1 / **3** | One local copy for every class |
+| Database / S3 / backup controllers | CNPG, Barman, Garage, Velero | Same releases |
+| Flux dependencies | `cilium`, `dns`, `pki`, `gateway`, `storage-*` | Same names; check the corresponding kind capabilities |
+| Policy / admin UIs | Cilium enforcement, Hubble, Longhorn UI | Policy schemas only; no enforcement or these UIs |
 | Edge address | `192.168.2.153`, ports 53/80/443 | Docker node IP inside cluster; loopback ports 1053/80/443 on host |
 
 ## Create the golden k3s cluster
@@ -61,13 +64,12 @@ Configure LAN DNS and client trust exactly as before. The public CA is
 
 ## Create the kind test cluster
 
-Use **native Linux with local, rootful Docker, cgroup v2, kernel iSCSI/NFS modules,
-and ext4/XFS storage**. This profile exercises real Longhorn. Docker Desktop,
-rootless Docker and remote Docker daemons are outside the supported setup.
+Use local Docker with Linux containers: rootful Docker on Linux or Docker
+Desktop on macOS/Windows (run these commands in a Linux/WSL shell on Windows).
 See [kind prerequisites and access](docs/kind.md).
 
-Install Python 3.11+, Git, OpenSSL, Docker, kind `v0.33.0`, kubectl `v1.36.4` and
-Helm `v3.19.0`. From a clean, published checkout:
+Install Python 3.11+, Git, OpenSSL, Docker, kind `v0.33.0` and kubectl `v1.36.4`.
+From a clean, published checkout:
 
 ```bash
 python3 scripts/bootstrap-kind.py
@@ -76,11 +78,10 @@ python3 scripts/check-base.py --profile kind
 python3 scripts/smoke-kind.py
 ```
 
-The script builds a node image with storage prerequisites, creates one
-schedulable control-plane node, installs Gateway API before Cilium, initializes
-a test CA, installs Flux and waits for the network and storage layers in order.
-Rerunning resumes the same cluster. It uses a dedicated kubeconfig and never
-changes the default kubeconfig's current context.
+The script creates one schedulable control-plane node using the standard kind
+image, prepares DNS and a test CA, then installs Flux and waits for the network
+and storage layers in order. Rerunning resumes the same cluster. It uses a
+dedicated kubeconfig without changing your default context.
 
 Keep default ports 80/443 when testing SSO redirects. Host access can use explicit
 loopback hosts entries, for example `127.0.0.1 auth.internal home.internal`.
@@ -127,7 +128,7 @@ keys and test data live in ignored `.state/`, outside Git reconciliation.
 
 See [validation and live acceptance](docs/testing.md). Static validation renders
 both profiles, charts, schemas and dependency graphs. A separate kind smoke
-workflow tests PVC remounts, DNS, HTTPS/policy and CNPG SQL on Linux Docker.
+workflow tests PVC remounts, DNS, HTTPS, policy API compatibility and CNPG SQL on Linux Docker.
 Physical k3s provisioning and LAN/GPU behavior still require host acceptance.
 
 This repository bootstraps **new clusters**. It does not automatically migrate
