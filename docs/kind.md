@@ -25,6 +25,10 @@ iscsid inside it, and checks Cilium cgroup isolation. It does not run k3s host
 preparation or the GPU/power-policy scripts. Docker Desktop, rootless Docker and
 remote Docker daemons are outside this profile's supported setup.
 
+Before installing Flux, bootstrap applies the same CoreDNS settings that Flux
+will later own and checks public DNS from a pod. GitHub resolution therefore
+does not depend on fetching the repository that configures DNS.
+
 ```bash
 python3 scripts/bootstrap-kind.py
 export KUBECONFIG="$PWD/.state/elektro-test/config.kubeconfig"

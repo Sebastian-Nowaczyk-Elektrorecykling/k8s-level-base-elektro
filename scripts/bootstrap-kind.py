@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -37,10 +38,14 @@ def wait(kube, *resources, timeout="15m", namespace="flux-system"):
     # Creation and reconciliation are asynchronous; kubectl wait alone races
     # NotFound and can accept a Ready condition from an older generation.
     deadline = time.monotonic() + int(timeout.removesuffix("m")) * 60
+    latest = {}
+    print("Waiting for " + ", ".join(resources), flush=True)
     while time.monotonic() < deadline:
         ready = True
         for resource in resources:
             obj = get(kube, resource, "-n", namespace, "--ignore-not-found")
+            latest[resource] = [c.get("message", "") for c in (obj or {}).get("status", {}).get("conditions", [])
+                                if c.get("type") == "Ready"]
             ready = ready and bool(obj and any(
                 c.get("type") == "Ready" and c.get("status") == "True" and
                 c.get("observedGeneration") == obj["metadata"]["generation"]
@@ -48,7 +53,29 @@ def wait(kube, *resources, timeout="15m", namespace="flux-system"):
         if ready:
             return
         time.sleep(5)
-    raise RuntimeError("Timed out waiting for " + ", ".join(resources))
+    raise RuntimeError("Timed out waiting for " + ", ".join(resources) + ": " + json.dumps(latest))
+
+
+def bootstrap_dns(kube, c):
+    # kind's initial resolver may contain a Docker-only loopback nameserver.
+    # Configure upstreams before Flux must resolve GitHub to fetch this repo.
+    obj = json.loads((ROOT / "profiles/kind/dns/coredns.yaml").read_text())
+    for key, value in {"DOMAIN": c["domain"], "LAN_DNS_SERVICE_IP": c["lan_dns_service_ip"],
+                       "UPSTREAM_DNS": " ".join(c["upstream_dns"])}.items():
+        obj["data"]["Corefile"] = obj["data"]["Corefile"].replace("${" + key + "}", value)
+    apply(kube, obj)
+    run(*kube, "-n", "kube-system", "rollout", "restart", "deployment/coredns")
+    run(*kube, "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=300s")
+    name = "base-dns-" + uuid.uuid4().hex[:8]
+    apply(kube, {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": name, "namespace": "kube-system"},
+        "spec": {"backoffLimit": 1, "activeDeadlineSeconds": 120, "ttlSecondsAfterFinished": 300,
+                 "template": {"spec": {"restartPolicy": "Never", "containers": [{"name": "dns",
+                 "image": "busybox:1.37.0", "command": ["nslookup", "github.com"]}]}}}})
+    try:
+        run(*kube, "-n", "kube-system", "wait", "job/" + name, "--for=condition=Complete", "--timeout=150s")
+    finally:
+        subprocess.run([*kube, "-n", "kube-system", "logs", "job/" + name], check=False)
+        subprocess.run([*kube, "-n", "kube-system", "delete", "job/" + name, "--wait=false"], check=False)
 
 
 def initialize_ca(kube, state, cluster_name):
@@ -213,6 +240,7 @@ def main():
             "--version", c["cilium_version"], "--values", state / "cilium-values.json", "--wait", "--timeout", "15m")
     run(*kube, "wait", "node", "--all", "--for=condition=Ready", "--timeout=300s")
     run(*kube, "-n", "kube-system", "rollout", "status", "deployment/coredns", "--timeout=300s")
+    bootstrap_dns(kube, c)
     initialize_ca(kube, state, name)
     run(*kube, "apply", "--server-side", "-k", "infrastructure/flux")
     run(*kube, "-n", "flux-system", "wait", "deployment", "--all", "--for=condition=Available", "--timeout=300s")
@@ -222,7 +250,7 @@ def main():
     initial = (ROOT / "kind/bootstrap/cluster-settings.yaml").read_text()
     apply(kube, json.loads(initial.replace("${KIND_NODE_IP}", node_ip).replace("${KIND_NODE_CIDR}", cidr)))
     run(*kube, "apply", "-f", "clusters/lan/flux-system/source.yaml", "-f", "kind/bootstrap/sync.yaml")
-    wait(kube, "gitrepository/flux-system", "kustomization/flux-system")
+    wait(kube, "gitrepository/flux-system", "kustomization/flux-system", timeout="5m")
     wait(kube, *["kustomization/" + n for n in ("cilium", "dns", "pki", "gateway", "apps")])
     run(*kube, "apply", "-k", "kind/bootstrap/storage")
     wait(kube, "gitrepository/storage-addons", "kustomization/storage-addons")

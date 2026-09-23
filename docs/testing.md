@@ -1,6 +1,7 @@
 # Validation and acceptance
 
-Install Helm `3.19.0`, Kustomize `5.7.1`, kubeconform `0.7.0` and ShellCheck:
+Install Helm `3.19.0`, Kustomize `5.7.1`, kubeconform `0.7.0`, Flux CLI `2.9.5`
+and ShellCheck:
 
 ```bash
 python3 -m venv .venv
@@ -15,7 +16,8 @@ python3 scripts/validate-profiles.py
 
 Inherited validators render pinned charts and check schemas. Profile validation
 checks file hashes, golden settings, all Flux paths/dependencies, substitutions,
-disjoint ownership, Gateway names/listeners and actual CSI classes. Bootstrap
+disjoint ownership, Gateway names/listeners and actual CSI classes. The Flux CLI
+also performs the kind root's strict substitution offline. Bootstrap
 tests cover CA error handling and stale readiness. Set `COREDNS` to the pinned
 CoreDNS binary for the inherited DNS protocol tests.
 

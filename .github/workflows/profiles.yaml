@@ -27,6 +27,9 @@ jobs:
           curl -fsSL --retry 3 https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz -o kubeconform.tgz
           echo 'c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  kubeconform.tgz' | sha256sum -c -
           tar -xzf kubeconform.tgz kubeconform
+          curl -fsSL --retry 3 https://github.com/fluxcd/flux2/releases/download/v2.9.5/flux_2.9.5_linux_amd64.tar.gz -o flux.tgz
+          echo 'b853df82adfd7736f580692f9f734473d571606307139f8fd20c2a80dd1ff473  flux.tgz' | sha256sum -c -
+          tar -xzf flux.tgz flux
           echo "$PWD" >> "$GITHUB_PATH"
       - name: Validate storage charts and schemas
         run: python3 storage/scripts/validate.py

@@ -60,12 +60,25 @@ def substitute(objects, settings):
     def replacement(match):
         assert match[1] in settings, "Missing substitution: " + match[1]
         return settings[match[1]]
-    return docs(re.sub(r"\$\{([A-Z_]+)\}", replacement, yaml.safe_dump_all(objects)))
+    result = []
+    for obj in objects:
+        meta = obj.get("metadata", {})
+        if any(meta.get(key, {}).get("kustomize.toolkit.fluxcd.io/substitute") == "disabled"
+               for key in ("labels", "annotations")):
+            result.append(obj)
+            continue
+        text = re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", replacement, yaml.safe_dump(obj))
+        assert "${" not in text, f"Unresolved substitution expression in {obj['kind']}/{meta.get('name')}"
+        result.extend(docs(text))
+    return result
 
 
 def profile(name):
     network_root = build("clusters/" + ("lan" if name == "k3s" else "kind"))
     if name == "kind":
+        for obj in network_root:
+            if obj["kind"] == "CustomResourceDefinition":
+                assert obj["metadata"]["labels"]["kustomize.toolkit.fluxcd.io/substitute"] == "disabled"
         network_root = substitute(network_root, {"KIND_NODE_IP": "172.18.0.2", "KIND_NODE_CIDR": "172.18.0.0/16"})
     settings = one(network_root, "ConfigMap", "cluster-settings")["data"]
     storage_root = build("storage/clusters/" + ("lan" if name == "k3s" else "kind"))
@@ -128,6 +141,15 @@ def main():
     run(sys.executable, "scripts/generate-kind.py", "--check")
     parity()
     golden, kind = profile("k3s"), profile("kind")
+    # Run the controller's actual substitution implementation too. In dry-run
+    # mode use explicit fixture values instead of reading a live ConfigMap.
+    fixture = json.loads((ROOT / "kind/bootstrap/sync.yaml").read_text())
+    fixture["spec"]["postBuild"] = {"substitute": {"KIND_NODE_IP": "172.18.0.2", "KIND_NODE_CIDR": "172.18.0.0/16"}}
+    flux_root = ROOT / ".cache/kind-flux-root.json"
+    flux_root.parent.mkdir(exist_ok=True)
+    flux_root.write_text(json.dumps(fixture))
+    run("flux", "build", "kustomization", "flux-system", "--path", "./clusters/kind",
+        "--kustomization-file", str(flux_root), "--dry-run", "--strict-substitute")
     # The only kind differences at the resource layer are deliberate overlays.
     for name in golden.keys() - {"cilium", "dns", "storage-classes", "storage-longhorn"}:
         assert golden[name] == kind[name], f"Unexpected profile difference: {name}"

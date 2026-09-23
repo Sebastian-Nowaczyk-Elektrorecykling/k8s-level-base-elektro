@@ -46,6 +46,10 @@ jobs:
         run: |
           kubectl get pods -A -o wide || true
           kubectl -n flux-system get kustomizations -o yaml || true
+          kubectl -n flux-system get gitrepositories -o yaml || true
+          kubectl -n flux-system logs deployment/source-controller --tail=100 || true
+          kubectl -n flux-system logs deployment/kustomize-controller --tail=100 || true
+          kubectl -n kube-system logs deployment/coredns --tail=100 || true
           kubectl get helmreleases -A -o yaml || true
           kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
       - name: Delete disposable cluster

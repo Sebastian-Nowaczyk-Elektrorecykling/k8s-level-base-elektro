@@ -45,6 +45,10 @@ def outputs():
     sync = copy.deepcopy(config.outputs(c)["clusters/lan/flux-system/sync.yaml"])
     sync["spec"].update(path="./clusters/kind", postBuild=runtime)
     patches = [
+        # Flux CRD descriptions contain literal shell-expression examples.
+        # Runtime substitution is for cluster settings, never those schemas.
+        patch("CustomResourceDefinition", ".*", [{"op": "add",
+              "path": "/metadata/labels/kustomize.toolkit.fluxcd.io~1substitute", "value": "disabled"}]),
         patch("Kustomization", "flux-system", [replace("/spec/path", "./clusters/kind"),
               {"op": "add", "path": "/spec/postBuild", "value": runtime}]),
         patch("ConfigMap", "cluster-settings", [replace("/data", settings["data"])]),

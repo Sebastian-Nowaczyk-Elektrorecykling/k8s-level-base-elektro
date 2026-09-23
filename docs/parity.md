@@ -35,7 +35,9 @@ installed by kind becomes non-default; `longhorn` is the sole default.
 
 The bootstrap-owned `kind-runtime` supplies the Docker node address to the root
 Flux Kustomization. Flux owns `cluster-settings` and passes it to the same child
-stages. No production address is committed into kind Cilium values.
+stages. Flux CRDs are labelled to disable substitution of the shell-expression
+examples in their schema descriptions. No production address is committed into
+kind Cilium values.
 
 To upgrade, inspect new upstream commits, update the lock and golden files,
 regenerate both profiles, run validation/live tests, and review the k3s diff.
