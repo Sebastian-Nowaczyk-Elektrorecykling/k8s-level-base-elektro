@@ -109,13 +109,23 @@ def outputs():
                 patch("StorageClass", "longhorn-replicated",
                       [replace("/parameters/numberOfReplicas", "1")])]),
         "profiles/kind/longhorn/kustomization.yaml": kustomization(
-            ["../../../storage/infrastructure/longhorn"], patches=[{
+            ["../../../storage/infrastructure/longhorn", "host-iscsi.yaml"], patches=[{
                 "target": {"kind": "HelmRelease", "name": "longhorn"},
                 "patch": json.dumps({"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
                     "metadata": {"name": "longhorn", "namespace": "longhorn-system"},
                     "spec": {"values": {"longhornUI": {"replicas": 1}, "csi": {
                         "attacherReplicaCount": 1, "provisionerReplicaCount": 1,
                         "resizerReplicaCount": 1, "snapshotterReplicaCount": 1}}}})}]),
+        # Longhorn 1.12.1's internal policy omits the Cilium link-local source
+        # used by the node's iSCSI initiator. Keep its other restrictions intact.
+        # https://github.com/longhorn/longhorn/issues/13802
+        "profiles/kind/longhorn/host-iscsi.yaml": {
+            "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
+            "metadata": {"name": "kind-host-iscsi", "namespace": "longhorn-system"},
+            "spec": {"podSelector": {"matchLabels": {"longhorn.io/component": "instance-manager"}},
+                     "policyTypes": ["Ingress"], "ingress": [{
+                         "from": [{"ipBlock": {"cidr": "169.254.0.0/16"}}],
+                         "ports": [{"protocol": "TCP", "port": 3260}]}]}},
         "storage/clusters/kind/kustomization.yaml": kustomization(["../lan"], patches=[
             patch("Kustomization", "storage-addons", [replace("/spec/path", "./storage/clusters/kind")]),
             patch("Kustomization", "storage-classes", [replace("/spec/path", "./profiles/kind/storage-classes")]),

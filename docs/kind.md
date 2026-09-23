@@ -78,6 +78,10 @@ replica on kind; it is not a redundancy test. CSI, PVC expansion and Longhorn
 APIs are real. Backups are unconfigured, as in the golden storage repository.
 GPU resources are not emulated.
 
+The pinned Longhorn 1.12.1 release needs an additional ingress policy for Cilium's
+link-local iSCSI source. The kind overlay permits `169.254.0.0/16` only to
+instance-manager TCP/3260, following the [documented upstream issue](https://github.com/longhorn/longhorn/issues/13802).
+
 To destroy a disposable cluster, verify the name and run:
 
 ```bash

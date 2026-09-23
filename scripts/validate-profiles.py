@@ -167,6 +167,9 @@ def main():
         manifest = cache / f"{release}.yaml"
         manifest.write_text(run("helm", "template", release, release, "--repo", repo, "--version", version,
             "--namespace", namespace, "--kube-version", "1.36.4", "--include-crds", "--values", str(value_path)))
+        if release == "longhorn":
+            policy = one(kind["storage-longhorn"], "NetworkPolicy", "kind-host-iscsi")
+            manifest.write_text(manifest.read_text() + "\n---\n" + yaml.safe_dump(policy))
         schemas = ROOT / "storage/.cache/schemas"
         assert schemas.exists(), "Run python3 storage/scripts/validate.py before this validator"
         print(run("kubeconform", "-strict", "-summary", "-kubernetes-version", "1.36.4",

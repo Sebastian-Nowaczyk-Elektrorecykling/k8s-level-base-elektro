@@ -33,6 +33,12 @@ replica counts. Kind CoreDNS does not automatically import `coredns-custom`, so
 the kind DNS target also manages its Corefile. The unused `standard` class
 installed by kind becomes non-default; `longhorn` is the sole default.
 
+The kind Longhorn target also adds an ingress allowance from Cilium's link-local
+range `169.254.0.0/16` to instance-manager TCP/3260. This permits the node's iSCSI
+initiator under the pinned Longhorn 1.12.1 policies; other internal restrictions
+remain enabled. See the [upstream issue and maintainer confirmation](https://github.com/longhorn/longhorn/issues/13802).
+The k3s manifests retain the original policy configuration.
+
 The bootstrap-owned `kind-runtime` supplies the Docker node address to the root
 Flux Kustomization. Flux owns `cluster-settings` and passes it to the same child
 stages. Flux CRDs are labelled to disable substitution of the shell-expression

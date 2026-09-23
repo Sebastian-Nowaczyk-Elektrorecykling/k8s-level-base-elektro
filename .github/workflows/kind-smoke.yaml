@@ -55,7 +55,11 @@ jobs:
           kubectl get pods -A -o wide || true
           kubectl get pvc -A || true
           kubectl -n longhorn-system get nodes.longhorn.io,volumes.longhorn.io -o yaml || true
+          kubectl -n longhorn-system get engines.longhorn.io,replicas.longhorn.io -o yaml || true
           kubectl -n longhorn-system logs -l app=longhorn-manager --tail=100 --prefix=true || true
+          kubectl -n longhorn-system logs -l longhorn.io/component=instance-manager --all-containers=true --tail=200 --prefix=true || true
+          docker exec elektro-test-control-plane journalctl -u iscsid --no-pager -n 100 || true
+          timeout 30s kubectl -n kube-system exec daemonset/cilium -c cilium-agent -- cilium-dbg monitor --type drop || true
           kubectl -n flux-system get kustomizations -o yaml || true
           kubectl -n flux-system get gitrepositories -o yaml || true
           kubectl -n flux-system logs deployment/source-controller --tail=100 || true
