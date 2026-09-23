@@ -6,6 +6,6 @@
     "namespace": "kube-system"
   },
   "data": {
-    "Corefile": "${DOMAIN}:53 {\n    errors\n    cache 30\n    forward . ${LAN_DNS_SERVICE_IP}\n}\n.:53 {\n    errors\n    health { lameduck 5s }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n        pods insecure\n        fallthrough in-addr.arpa ip6.arpa\n        ttl 30\n    }\n    prometheus :9153\n    forward . ${UPSTREAM_DNS} { max_concurrent 1000 }\n    cache 30\n    loop\n    reload\n    loadbalance\n}\n"
+    "Corefile": "${DOMAIN}:53 {\n    errors\n    cache 30\n    forward . ${LAN_DNS_SERVICE_IP}\n}\n.:53 {\n    errors\n    health {\n        lameduck 5s\n    }\n    ready\n    kubernetes cluster.local in-addr.arpa ip6.arpa {\n        pods insecure\n        fallthrough in-addr.arpa ip6.arpa\n        ttl 30\n    }\n    prometheus :9153\n    forward . ${UPSTREAM_DNS} {\n        max_concurrent 1000\n    }\n    cache 30\n    loop\n    reload\n    loadbalance\n}\n"
   }
 }

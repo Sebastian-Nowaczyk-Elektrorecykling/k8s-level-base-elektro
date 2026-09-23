@@ -58,7 +58,9 @@ def outputs():
 }
 .:53 {
     errors
-    health { lameduck 5s }
+    health {
+        lameduck 5s
+    }
     ready
     kubernetes cluster.local in-addr.arpa ip6.arpa {
         pods insecure
@@ -66,7 +68,9 @@ def outputs():
         ttl 30
     }
     prometheus :9153
-    forward . ${UPSTREAM_DNS} { max_concurrent 1000 }
+    forward . ${UPSTREAM_DNS} {
+        max_concurrent 1000
+    }
     cache 30
     loop
     reload
