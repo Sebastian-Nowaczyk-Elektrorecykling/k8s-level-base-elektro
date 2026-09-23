@@ -1,0 +1,171 @@
+# cilium and cert-manager are read-only dependencies owned by the base repository.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-namespaces
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/namespaces
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-sources
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/sources
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: true
+  deletionPolicy: Orphan
+  wait: true
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-longhorn
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/longhorn
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-namespaces
+  - name: storage-sources
+  - name: cilium
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-classes
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/storage-classes
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-longhorn
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-cnpg
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/cnpg
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-namespaces
+  - name: storage-sources
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-barman
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/barman
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-cnpg
+  - name: cert-manager
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-garage
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/garage
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: false
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-classes
+  - name: storage-namespaces
+  - name: storage-sources
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: storage-velero
+  namespace: flux-system
+  labels:
+    app.kubernetes.io/part-of: storage-addons
+spec:
+  interval: 5m
+  retryInterval: 1m
+  timeout: 25m
+  path: ./storage/infrastructure/velero
+  sourceRef:
+    kind: GitRepository
+    name: storage-addons
+  prune: true
+  deletionPolicy: Orphan
+  wait: true
+  dependsOn:
+  - name: storage-namespaces
+  - name: storage-sources

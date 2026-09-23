@@ -1,0 +1,16 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "resources": [
+    "../../../storage/infrastructure/storage-classes"
+  ],
+  "patches": [
+    {
+      "target": {
+        "kind": "StorageClass",
+        "name": "longhorn-replicated"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/parameters/numberOfReplicas\", \"value\": \"1\"}]"
+    }
+  ]
+}

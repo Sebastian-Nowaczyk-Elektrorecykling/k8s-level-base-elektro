@@ -1,0 +1,47 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: velero
+  namespace: velero
+spec:
+  releaseName: velero
+  interval: 10m
+  timeout: 10m
+  chart:
+    spec:
+      chart: velero
+      version: 12.2.0
+      sourceRef:
+        kind: HelmRepository
+        name: storage-velero
+        namespace: flux-system
+  install:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  driftDetection:
+    mode: enabled
+  values:
+    # Flux manages CRD upgrades; disable the chart's separate upgrade hook.
+    upgradeCRDs: false
+    cleanUpCRDs: false
+    backupsEnabled: false
+    snapshotsEnabled: false
+    credentials:
+      useSecret: false
+    configuration:
+      backupStorageLocation: []
+      volumeSnapshotLocation: []
+      features: ""
+    deployNodeAgent: false
+    initContainers: []
+    schedules: {}
+    metrics:
+      serviceMonitor:
+        enabled: false
+      prometheusRule:
+        enabled: false

@@ -1,0 +1,37 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "resources": [
+    "../lan"
+  ],
+  "patches": [
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "flux-system"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./clusters/kind\"}, {\"op\": \"add\", \"path\": \"/spec/postBuild\", \"value\": {\"substituteFrom\": [{\"kind\": \"ConfigMap\", \"name\": \"kind-runtime\"}]}}]"
+    },
+    {
+      "target": {
+        "kind": "ConfigMap",
+        "name": "cluster-settings"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/data\", \"value\": {\"CLUSTER_NAME\": \"elektro-test\", \"GIT_URL\": \"https://github.com/Sebastian-Nowaczyk-Elektrorecykling/k8s-level-base-elektro.git\", \"GIT_BRANCH\": \"main\", \"LAN_CIDR\": \"${KIND_NODE_CIDR}\", \"API_IP\": \"${KIND_NODE_IP}\", \"POD_CIDR\": \"10.42.0.0/16\", \"SERVICE_CIDR\": \"10.43.0.0/16\", \"CLUSTER_DNS_IP\": \"10.43.0.10\", \"LAN_DNS_SERVICE_IP\": \"10.43.0.54\", \"DOMAIN\": \"internal\", \"OPERATOR_REPLICAS\": \"1\", \"K3S_VERSION\": \"v1.36.4+k3s1\", \"CILIUM_VERSION\": \"1.20.2\", \"GATEWAY_API_VERSION\": \"v1.6.1\", \"FLUX_VERSION\": \"v2.9.5\", \"HELM_VERSION\": \"v3.19.0\", \"CERT_MANAGER_VERSION\": \"v1.21.2\", \"COREDNS_IMAGE\": \"coredns/coredns:1.14.7\", \"NVIDIA_TOOLKIT_VERSION\": \"1.20.0-1\", \"UPSTREAM_DNS\": \"1.1.1.1 9.9.9.9\", \"ADMIN_DOMAIN\": \"admin.internal\", \"MANAGEMENT_DOMAIN\": \"management.internal\", \"TESTING_DOMAIN\": \"testing.internal\", \"STAGING_DOMAIN\": \"staging.internal\", \"CONFIG_REVISION\": \"febfa76766944fb4\", \"CLUSTER_PROFILE\": \"kind\"}}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "cilium"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/cilium\"}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "dns"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/dns\"}]"
+    }
+  ]
+}

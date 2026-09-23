@@ -1,0 +1,15 @@
+{
+  "apiVersion": "source.toolkit.fluxcd.io/v1",
+  "kind": "GitRepository",
+  "metadata": {
+    "name": "storage-addons",
+    "namespace": "flux-system"
+  },
+  "spec": {
+    "interval": "1m",
+    "url": "https://github.com/Sebastian-Nowaczyk-Elektrorecykling/k8s-level-base-elektro.git",
+    "ref": {
+      "branch": "main"
+    }
+  }
+}

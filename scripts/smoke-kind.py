@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Exercise real storage, private DNS, HTTPS routing and CNPG on a kind base."""
+import argparse
+import json
+import os
+from pathlib import Path
+import secrets
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(*args, input=None):
+    return subprocess.check_output(args, input=input, text=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--https-port", type=int, default=443)
+    args = parser.parse_args()
+    run(sys.executable, str(ROOT / "scripts/check-base.py"), "--profile", "kind")
+    settings = json.loads(run("kubectl", "-n", "flux-system", "get", "cm/cluster-settings", "-o", "json"))["data"]
+    if settings.get("CLUSTER_PROFILE") != "kind":
+        raise RuntimeError("Smoke test is restricted to the kind profile.")
+    namespace = "base-smoke-" + secrets.token_hex(3)
+    token = secrets.token_hex(16)
+    def apply(obj):
+        run("kubectl", "apply", "-f", "-", input=json.dumps(obj))
+    def resource(api, kind, name, **fields):
+        return dict(apiVersion=api, kind=kind, metadata={"name": name, "namespace": namespace}, **fields)
+    apply({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": namespace,
+          "labels": {"elektro.internal/route-scope": "applications"}}})
+    try:
+        classes = ("longhorn", "longhorn-cnpg", "longhorn-garage", "longhorn-replicated")
+        for name in classes:
+            apply(resource("v1", "PersistentVolumeClaim", name, spec={"accessModes": ["ReadWriteOnce"],
+                "storageClassName": name, "resources": {"requests": {"storage": "1Gi"}}}))
+        def pod(name, command):
+            return resource("v1", "Pod", name, spec={"restartPolicy": "Never", "containers": [{
+                "name": "test", "image": "busybox:1.37.0", "command": ["sh", "-ec", command],
+                "volumeMounts": [{"name": c, "mountPath": "/data/" + c} for c in classes]}],
+                "volumes": [{"name": c, "persistentVolumeClaim": {"claimName": c}} for c in classes]})
+        apply(pod("write", f"for p in /data/*; do echo {token} > \"$p/probe\"; done; sync; sleep 3600"))
+        run("kubectl", "-n", namespace, "wait", "pod/write", "--for=condition=Ready", "--timeout=10m")
+        run("kubectl", "-n", namespace, "exec", "write", "--", "sh", "-ec",
+            f"for p in /data/*; do test \"$(cat \"$p/probe\")\" = {token}; done")
+        run("kubectl", "-n", namespace, "delete", "pod/write", "--wait=true", "--timeout=180s")
+        apply(pod("read", f"for p in /data/*; do test \"$(cat \"$p/probe\")\" = {token}; done; sleep 3600"))
+        run("kubectl", "-n", namespace, "wait", "pod/read", "--for=condition=Ready", "--timeout=10m")
+        hostname = namespace + "." + settings["TESTING_DOMAIN"]
+        dns = run("kubectl", "-n", namespace, "exec", "read", "--", "nslookup", hostname)
+        if settings["API_IP"] not in dns:
+            raise RuntimeError("Private DNS returned an unexpected address")
+        run("kubectl", "-n", namespace, "exec", "read", "--", "nslookup", "kubernetes.default.svc.cluster.local")
+        apply(resource("apps/v1", "Deployment", "echo", spec={"replicas": 1,
+            "selector": {"matchLabels": {"app": "echo"}}, "template": {"metadata": {"labels": {"app": "echo"}},
+            "spec": {"containers": [{"name": "echo", "image": "traefik/whoami:v1.11.0", "args": ["--port=8080"]}]}}}))
+        apply(resource("v1", "Service", "echo", spec={"selector": {"app": "echo"}, "ports": [{"port": 80, "targetPort": 8080}]}))
+        apply(resource("cilium.io/v2", "CiliumNetworkPolicy", "echo", spec={"endpointSelector": {"matchLabels": {"app": "echo"}},
+            "ingress": [{"fromEntities": ["ingress"], "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}]}]}))
+        apply(resource("gateway.networking.k8s.io/v1", "HTTPRoute", "echo", spec={"parentRefs": [{"name": "internal",
+            "namespace": "gateway-system", "sectionName": "testing-https"}], "hostnames": [hostname],
+            "rules": [{"backendRefs": [{"name": "echo", "port": 80}]}]}))
+        run("kubectl", "-n", namespace, "rollout", "status", "deployment/echo", "--timeout=180s")
+        import base64
+        secret = json.loads(run("kubectl", "-n", "cert-manager", "get", "secret/internal-ca", "-o", "json"))
+        with tempfile.TemporaryDirectory() as tmp:
+            ca = Path(tmp) / "ca.crt"
+            ca.write_bytes(base64.b64decode(secret["data"]["tls.crt"]))
+            # Curl validates both the certificate and the hostname. The Cilium
+            # policy only admits the Gateway's reserved ingress identity.
+            body = run("curl", "--noproxy", "*", "--fail", "--silent", "--show-error",
+                "--retry", "30", "--retry-delay", "2", "--retry-all-errors", "--max-time", "10",
+                "--cacert", str(ca), "--resolve", f"{hostname}:{args.https_port}:127.0.0.1",
+                f"https://{hostname}:{args.https_port}/")
+            if "Hostname:" not in body:
+                raise RuntimeError("Gateway response did not reach the echo backend")
+        apply(resource("postgresql.cnpg.io/v1", "Cluster", "database", spec={"instances": 1,
+            "storage": {"storageClass": "longhorn-cnpg", "size": "1Gi"},
+            "bootstrap": {"initdb": {"database": "app", "owner": "app"}}}))
+        run("kubectl", "-n", namespace, "wait", "cluster.postgresql.cnpg.io/database",
+            "--for=condition=Ready", "--timeout=10m")
+        result = run("kubectl", "-n", namespace, "exec", "database-1", "-c", "postgres", "--",
+                     "psql", "-U", "postgres", "-tAc", "SELECT 1")
+        if result.strip() != "1":
+            raise RuntimeError("CNPG SQL probe failed")
+        print("Smoke passed: four PVC write/remount checks, private/cluster DNS, verified HTTPS with Cilium policy, and CNPG SQL.")
+    finally:
+        # Only this invocation's randomly named disposable namespace is removed.
+        run("kubectl", "delete", "namespace", namespace, "--wait=false")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (KeyError, OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        sys.exit(str(error))

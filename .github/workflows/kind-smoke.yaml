@@ -1,0 +1,53 @@
+name: Live kind smoke
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kind-smoke-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  kind:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.13'}
+      - uses: azure/setup-helm@v4
+        with: {version: v3.19.0}
+      - uses: azure/setup-kubectl@v4
+        with: {version: v1.36.4}
+      - name: Install kind and kernel modules
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          sudo modprobe iscsi_tcp
+          sudo modprobe nfs
+          mkdir -p .cache/bin
+          curl -fsSL --retry 3 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 -o .cache/bin/kind
+          curl -fsSL --retry 3 https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64.sha256sum -o .cache/bin/kind.sha256sum
+          (cd .cache/bin && sed 's/kind-linux-amd64/kind/' kind.sha256sum | sha256sum --check --strict)
+          chmod +x .cache/bin/kind
+          echo "$PWD/.cache/bin" >> "$GITHUB_PATH"
+      - name: Bootstrap full base
+        run: python3 scripts/bootstrap-kind.py
+      - name: Exercise PVCs, DNS, HTTPS policy and CNPG
+        env:
+          KUBECONFIG: ${{ github.workspace }}/.state/elektro-test/config.kubeconfig
+        run: python3 scripts/smoke-kind.py
+      - name: Diagnostics
+        if: failure()
+        env:
+          KUBECONFIG: ${{ github.workspace }}/.state/elektro-test/config.kubeconfig
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl -n flux-system get kustomizations -o yaml || true
+          kubectl get helmreleases -A -o yaml || true
+          kubectl get events -A --sort-by=.lastTimestamp | tail -100 || true
+      - name: Delete disposable cluster
+        if: always()
+        run: kind delete cluster --name elektro-test

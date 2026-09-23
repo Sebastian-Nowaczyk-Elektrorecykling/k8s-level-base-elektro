@@ -1,0 +1,23 @@
+# Optional application example. Flux does not reconcile the examples directory.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: example
+  namespace: databases
+spec:
+  instances: 1
+  storage:
+    # CNPG has no operator-wide class default; set this on each Cluster.
+    storageClass: longhorn-cnpg
+    size: 5Gi
+  # The pinned operator supplies its default PostgreSQL image and generates
+  # application credentials. No Barman ObjectStore or backup is configured.
+  bootstrap:
+    initdb:
+      database: app
+      owner: app

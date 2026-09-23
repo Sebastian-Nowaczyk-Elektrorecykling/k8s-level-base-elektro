@@ -1,0 +1,8 @@
+{
+  "name": "elektro-test",
+  "kind_version": "v0.33.0",
+  "node_image": "kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed",
+  "http_port": 80,
+  "https_port": 443,
+  "dns_port": 1053
+}

@@ -1,0 +1,30 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "resources": [
+    "../lan"
+  ],
+  "patches": [
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "storage-addons"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./storage/clusters/kind\"}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "storage-classes"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/storage-classes\"}]"
+    },
+    {
+      "target": {
+        "kind": "Kustomization",
+        "name": "storage-longhorn"
+      },
+      "patch": "[{\"op\": \"replace\", \"path\": \"/spec/path\", \"value\": \"./profiles/kind/longhorn\"}]"
+    }
+  ]
+}

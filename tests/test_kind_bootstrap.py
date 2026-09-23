@@ -1,0 +1,54 @@
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location("bootstrap_kind", ROOT / "scripts/bootstrap-kind.py")
+kind = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kind)
+
+
+class KindBootstrapTests(unittest.TestCase):
+    def test_single_node_uses_golden_networks_and_isolates_host_ports(self):
+        c = json.loads((ROOT / "config/cluster.json").read_text())
+        settings = json.loads((ROOT / "config/kind.json").read_text())
+        obj = kind.cluster_config(c, settings, Path("/tmp/test-state"))
+        self.assertEqual(len(obj["nodes"]), 1)
+        self.assertTrue(obj["networking"]["disableDefaultCNI"])
+        self.assertEqual(obj["networking"]["kubeProxyMode"], "none")
+        self.assertEqual(obj["networking"]["serviceSubnet"], c["service_cidr"])
+        self.assertEqual(obj["networking"]["podSubnet"], c["pod_cidr"])
+        self.assertEqual(obj["nodes"][0]["labels"]["elektro.internal/edge"], "true")
+        self.assertTrue(all(p["listenAddress"] == "127.0.0.1" for p in obj["nodes"][0]["extraPortMappings"]))
+
+    def test_wait_rejects_old_ready_generation_and_waits_for_creation(self):
+        old = {"metadata": {"generation": 2}, "status": {"conditions": [
+            {"type": "Ready", "status": "True", "observedGeneration": 1}]}}
+        current = {"metadata": {"generation": 2}, "status": {"conditions": [
+            {"type": "Ready", "status": "True", "observedGeneration": 2}]}}
+        with patch.object(kind, "get", side_effect=[None, old, current]) as get, patch.object(kind.time, "sleep"):
+            kind.wait(["kubectl"], "kustomization/gateway")
+            self.assertEqual(get.call_count, 3)
+
+    def test_ca_read_error_is_not_interpreted_as_absence(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(kind, "apply"), patch.object(
+                kind, "get", side_effect=RuntimeError("API unavailable")), patch.object(kind, "run") as run:
+            state = Path(tmp)
+            (state / "ca.key").write_text("preserve")
+            with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+                kind.initialize_ca([], state, "test")
+            self.assertEqual((state / "ca.key").read_text(), "preserve")
+            run.assert_not_called()
+
+    def test_incomplete_local_ca_does_not_create_new_trust_root(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(kind, "apply"), patch.object(
+                kind, "get", return_value=None), patch.object(kind, "run") as run:
+            state = Path(tmp)
+            (state / "ca.crt").write_text("preserve")
+            with self.assertRaisesRegex(RuntimeError, "Incomplete local CA"):
+                kind.initialize_ca([], state, "test")
+            self.assertEqual((state / "ca.crt").read_text(), "preserve")
+            run.assert_not_called()

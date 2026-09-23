@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - flux-system
+  - cluster-settings.yaml
+  - infrastructure.yaml
+patches:
+  - target:
+      group: kustomize.toolkit.fluxcd.io
+      version: v1
+      kind: Kustomization
+      name: (network|gateway|apps)
+    path: gateway-health.yaml
