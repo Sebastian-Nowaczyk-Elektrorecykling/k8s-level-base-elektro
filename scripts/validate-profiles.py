@@ -149,7 +149,7 @@ def main():
     flux_root.parent.mkdir(exist_ok=True)
     flux_root.write_text(json.dumps(fixture))
     run("flux", "build", "kustomization", "flux-system", "--path", "./clusters/kind",
-        "--kustomization-file", str(flux_root), "--dry-run", "--strict-substitute")
+        "--kustomization-file", str(flux_root), "--dry-run", "--strict-substitute", "--in-memory-build")
     # The only kind differences at the resource layer are deliberate overlays.
     for name in golden.keys() - {"cilium", "dns", "storage-classes", "storage-longhorn"}:
         assert golden[name] == kind[name], f"Unexpected profile difference: {name}"
