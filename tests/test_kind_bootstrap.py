@@ -12,6 +12,20 @@ spec.loader.exec_module(kind)
 
 
 class KindBootstrapTests(unittest.TestCase):
+    def test_nonroot_can_delegate_privileged_port_check_to_docker(self):
+        with patch.object(kind.socket, "socket") as socket, patch.object(kind.os, "geteuid", return_value=1000), \
+                patch.object(kind.Path, "read_text", return_value="1024"):
+            socket.return_value.__enter__.return_value.bind.side_effect = PermissionError()
+            kind.check_host_ports([{"protocol": "TCP", "hostPort": 443}])
+            with self.assertRaises(PermissionError):
+                kind.check_host_ports([{"protocol": "TCP", "hostPort": 8443}])
+
+    def test_port_in_use_is_not_ignored(self):
+        with patch.object(kind.socket, "socket") as socket, patch.object(kind.Path, "read_text", return_value="1024"):
+            socket.return_value.__enter__.return_value.bind.side_effect = OSError("Address already in use")
+            with self.assertRaisesRegex(OSError, "Address already in use"):
+                kind.check_host_ports([{"protocol": "TCP", "hostPort": 443}])
+
     def test_single_node_uses_golden_networks_and_isolates_host_ports(self):
         c = json.loads((ROOT / "config/cluster.json").read_text())
         settings = json.loads((ROOT / "config/kind.json").read_text())

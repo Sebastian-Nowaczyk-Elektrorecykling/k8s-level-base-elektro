@@ -101,6 +101,21 @@ def cluster_config(c, settings, state):
                             {"hostPath": str(state / "data"), "containerPath": "/var/lib/longhorn"}]}]}
 
 
+def check_host_ports(mappings):
+    privileged_start = int(Path("/proc/sys/net/ipv4/ip_unprivileged_port_start").read_text())
+    for mapping in mappings:
+        kind = socket.SOCK_STREAM if mapping["protocol"] == "TCP" else socket.SOCK_DGRAM
+        with socket.socket(socket.AF_INET, kind) as sock:
+            try:
+                sock.bind(("127.0.0.1", mapping["hostPort"]))
+            except PermissionError:
+                if os.geteuid() == 0 or mapping["hostPort"] >= privileged_start:
+                    raise
+                # A rootful Docker daemon publishes these ports. Its create
+                # operation performs the authoritative conflict check.
+                print(f"Docker will check privileged host port {mapping['hostPort']}/{mapping['protocol']}.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", help="Independent test cluster name (default from config/kind.json)")
@@ -142,10 +157,7 @@ def main():
     else:
         if any((state / "data").iterdir()) or (state / "ca.key").exists() or (state / "ca.crt").exists():
             raise RuntimeError("Old cluster state remains. Archive it and use a fresh state directory; see docs/kind.md.")
-        for mapping in configuration["nodes"][0]["extraPortMappings"]:
-            kind = socket.SOCK_STREAM if mapping["protocol"] == "TCP" else socket.SOCK_DGRAM
-            with socket.socket(socket.AF_INET, kind) as sock:
-                sock.bind(("127.0.0.1", mapping["hostPort"]))
+        check_host_ports(configuration["nodes"][0]["extraPortMappings"])
         config_path.write_text(json.dumps(configuration, indent=2) + "\n")
         image = "elektro-kind-node:v1.36.4"
         run("docker", "build", "--build-arg", "NODE_IMAGE=" + settings["node_image"],
