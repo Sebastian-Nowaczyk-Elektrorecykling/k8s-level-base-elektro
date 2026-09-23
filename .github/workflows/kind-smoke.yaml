@@ -15,6 +15,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Make room for storage on the disposable runner
+        run: |
+          # These SDKs belong to this fresh GitHub-hosted VM, not a user host.
+          # Keep Longhorn's normal disk reserve and make room for its images/PVs.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker image prune --all --force
+          df -h "$GITHUB_WORKSPACE" /var/lib/docker
       - uses: actions/setup-python@v5
         with: {python-version: '3.13'}
       - uses: azure/setup-helm@v4
@@ -44,7 +51,11 @@ jobs:
         env:
           KUBECONFIG: ${{ github.workspace }}/.state/elektro-test/config.kubeconfig
         run: |
+          df -h "$GITHUB_WORKSPACE" /var/lib/docker
           kubectl get pods -A -o wide || true
+          kubectl get pvc -A || true
+          kubectl -n longhorn-system get nodes.longhorn.io,volumes.longhorn.io -o yaml || true
+          kubectl -n longhorn-system logs -l app=longhorn-manager --tail=100 --prefix=true || true
           kubectl -n flux-system get kustomizations -o yaml || true
           kubectl -n flux-system get gitrepositories -o yaml || true
           kubectl -n flux-system logs deployment/source-controller --tail=100 || true

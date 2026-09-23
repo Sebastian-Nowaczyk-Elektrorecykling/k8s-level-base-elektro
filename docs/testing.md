@@ -37,7 +37,9 @@ a CNPG database and executes SQL. It requires free storage for the test PVCs.
 
 Static CI runs on pushes and pull requests. Kind smoke runs on `main` pushes
 and can be dispatched against `main`. It uses a fresh Linux runner, not a user
-cluster. A run must pass before claiming live kind validation. Bootstrap requires
+cluster. The workflow removes unused preinstalled SDKs from that disposable VM
+to leave room for storage while retaining Longhorn's normal disk reserve.
+A run must pass before claiming live kind validation. Bootstrap requires
 the checkout to match the configured branch, so PR branches get static checks.
 
 To test a separate branch on your own host, change `git_branch` in
